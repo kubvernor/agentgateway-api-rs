@@ -1,0 +1,497 @@
+syntax = "proto3";
+
+package agentgateway.dev.resource;
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/wrappers.proto";
+import "google/protobuf/struct.proto";
+
+option go_package = "github.com/agentgateway/agentgateway/go/api;api";
+
+message Resource {
+  oneof kind {
+    Bind bind = 1;
+    Listener listener = 2;
+    Route route = 3;
+    Backend backend = 4;
+    Policy policy = 5;
+    TCPRoute tcp_route = 6;
+  }
+}
+
+message Bind {
+  string key = 1;
+  uint32 port = 2;
+}
+
+message Listener {
+  // Unique key
+  string key = 1;
+  // User facing name; may not be unique
+  string name = 2;
+  string bind_key = 3;
+  // User facing Gateway name
+  string gateway_name = 4;
+  string hostname = 5;
+  Protocol protocol = 6;
+  TLSConfig tls = 7;
+}
+
+message TLSConfig {
+  bytes cert = 1;
+  bytes private_key = 2;
+}
+
+enum Protocol {
+  UNKNOWN = 0;
+  HTTP = 1;
+  HTTPS = 2;
+  TLS = 3;
+  TCP = 4;
+  HBONE = 5;
+}
+message Route {
+  // Unique key
+  string key = 1;
+  string listener_key = 2;
+  // User facing rule name. May not be unique.
+  string rule_name = 3;
+  // User facing route name May not be unique.
+  string route_name = 4;
+  repeated string hostnames = 5;
+  repeated RouteMatch matches = 6;
+  repeated RouteFilter filters = 7;
+  repeated RouteBackend backends = 8;
+  TrafficPolicy traffic_policy = 9;
+  repeated PolicySpec inline_policies = 10;
+}
+
+message TCPRoute {
+  // Unique key
+  string key = 1;
+  string listener_key = 2;
+  // User facing rule name. May not be unique.
+  string rule_name = 3;
+  // User facing route name May not be unique.
+  string route_name = 4;
+  repeated string hostnames = 5;
+  repeated RouteBackend backends = 6;
+}
+
+message TrafficPolicy {
+  google.protobuf.Duration backend_request_timeout = 1;
+  google.protobuf.Duration request_timeout = 2;
+  Retry retry = 3;
+}
+
+message Retry {
+  repeated int32 retry_status_codes = 1;
+  int32 attempts = 2;
+  google.protobuf.Duration backoff = 3;
+}
+
+message BackendAuthPolicy {
+  oneof kind {
+    Passthrough passthrough = 1;
+    Key key = 2;
+    Gcp gcp = 3;
+    Aws aws = 4;
+  }
+}
+
+// No fields needed for passthrough authentication.
+message Passthrough {}
+
+// Contains a secret for authentication, e.g. an API key.
+message Key {
+  string secret = 1;
+}
+
+// GCP-specific backend authentication.
+message Gcp {}
+
+// AWS-specific backend authentication.
+message Aws {
+  oneof kind {
+    AwsExplicitConfig explicit_config = 1;
+    AwsImplicit implicit = 2;
+  }
+}
+
+// Explicit AWS credentials configuration
+message AwsExplicitConfig {
+  // AWS Access Key ID for authentication
+  string access_key_id = 1;
+  // AWS Secret Access Key for authentication  
+  string secret_access_key = 2;
+  // AWS Region (e.g., "us-west-2", "us-east-1")
+  string region = 3;
+  // Optional session token for temporary credentials
+  optional string session_token = 4;
+  // TODO: make service configurable
+}
+
+// Use implicit AWS authentication (environment variables, IAM roles, etc.)
+message AwsImplicit {}
+
+message RouteMatch {
+  PathMatch path = 1;
+  repeated HeaderMatch headers = 2;
+  MethodMatch method = 3;
+  repeated QueryMatch query_params = 4;
+}
+
+message PathMatch {
+  oneof kind {
+    string exact = 1;
+    string path_prefix = 2;
+    string regex = 3;
+  }
+}
+
+message QueryMatch {
+  string name = 1;
+  oneof value {
+    string exact = 2;
+    string regex = 3;
+  }
+}
+
+message MethodMatch {
+  string exact = 1;
+}
+
+message HeaderMatch {
+  string name = 1;
+
+  oneof value {
+    string exact = 2;
+    string regex = 3;
+  }
+}
+
+message RouteFilter {
+  oneof kind {
+    HeaderModifier request_header_modifier = 1;
+    HeaderModifier response_header_modifier = 2;
+    RequestRedirect request_redirect = 3;
+    UrlRewrite url_rewrite = 4;
+    RequestMirror request_mirror = 5;
+    DirectResponse direct_response = 6;
+    CORS cors = 7;
+  }
+}
+
+message CORS {
+  bool allow_credentials = 1;
+  repeated string allow_headers = 2;
+  repeated string allow_methods = 3;
+  repeated string allow_origins = 4;
+  repeated string expose_headers = 5;
+  // max_age is in seconds, use google.protobuf.Duration if available, otherwise uint64 for seconds
+  google.protobuf.Duration max_age = 6;
+}
+
+message DirectResponse {
+  uint32 status = 1;
+  bytes body = 2;
+}
+
+message HeaderModifier {
+  repeated Header add = 1;
+  repeated Header set = 2;
+  repeated string remove = 3;
+}
+
+message RequestMirror {
+  BackendReference backend = 1;
+  // 0-100
+  double percentage = 2;
+}
+
+message RequestRedirect {
+  string scheme = 1;
+  string host = 2;
+  oneof path {
+    string full = 3;
+    string prefix = 4;
+  }
+  uint32 port = 5;
+  uint32 status = 6;
+}
+
+message UrlRewrite {
+  string host = 1;
+  oneof path {
+    string full = 2;
+    string prefix = 3;
+  }
+}
+
+message Header {
+  string name = 1;
+  string value = 2;
+}
+
+message RouteBackend {
+  BackendReference backend = 1;
+  int32 weight = 2;
+  repeated RouteFilter filters = 4;
+}
+
+message PolicyTarget {
+  oneof kind {
+    // Matches Listener.gateway_name
+    string gateway = 1;
+    // Matches Listener.name
+    string listener = 2;
+    // Match Route.route_name
+    string route = 3;
+    // Matches Route.rule_name
+    string route_rule = 4;
+    // For ServicePort: `service/{namespace}/{hostname}:{port}`
+    // For Backend: `{ns}/{name}`
+    string backend = 5;
+    // namespace}/{hostname}
+    string service = 6;
+  }
+}
+message PolicySpec {
+  message LocalRateLimit {
+    enum Type {
+      REQUEST = 0;
+      TOKEN = 1;
+    }
+    uint64 max_tokens = 1;
+    uint64 tokens_per_fill = 2;
+    google.protobuf.Duration fill_interval = 3;
+    Type type = 4;
+  }
+    message Ai {
+      message Message {
+        string role = 1;
+        string content = 2;
+      }
+
+      message PromptEnrichment {
+        repeated Message append = 1;
+        repeated Message prepend = 2;
+      }
+
+    enum BuiltinRegexRule {
+      BUILTIN_UNSPECIFIED = 0;
+      SSN = 1;
+      CREDIT_CARD = 2;
+      PHONE_NUMBER = 3;
+      EMAIL = 4;
+    }
+
+    message NamedRegex {
+      string pattern = 1;
+      string name = 2;
+    }
+
+    message RegexRule {
+      oneof kind {
+        BuiltinRegexRule builtin = 1;
+        NamedRegex regex = 2;
+      }
+    }
+
+    enum ActionKind {
+      ACTION_UNSPECIFIED = 0;
+      MASK = 1;
+      REJECT = 2;
+    }
+
+    message Action {
+      ActionKind kind = 1;
+      // Only used when kind == REJECT
+      RequestRejection reject_response = 2;
+    }
+
+    message RegexRules {
+      Action action = 1;
+      repeated RegexRule rules = 2;
+    }
+
+    message Webhook {
+      string host = 1;
+      uint32 port = 2;
+    }
+
+    message Moderation {
+      // Model to use. Defaults to `omni-moderation-latest`
+      google.protobuf.StringValue model = 1;
+      BackendAuthPolicy auth = 2;
+    }
+
+    // Response sent when rejecting a request
+    message RequestRejection {
+      bytes body = 1;
+      uint32 status = 2;
+    }
+
+    // Configuration for guarding/processing LLM responses
+    message ResponseGuard {
+      RegexRules regex = 1;
+      Webhook webhook = 2;
+    }
+
+    // Configuration for guarding/processing prompts
+    message RequestGuard {
+      // Response to send when request is rejected
+      RequestRejection rejection = 1;
+      RegexRules regex = 2;
+      Webhook webhook = 3;
+      Moderation openai_moderation = 4;
+    }
+
+    message PromptGuard {
+      // Guards applied to client requests before they reach the LLM
+      RequestGuard request = 1;
+      // Guards applied to LLM responses before they reach the client
+      ResponseGuard response = 2;
+    }
+
+    PromptGuard prompt_guard = 1;
+    map<string, string> defaults = 2;
+    map<string, string> overrides = 3;
+    PromptEnrichment prompts = 4;
+  }
+  message ExternalAuth {
+    BackendReference target = 1;
+    map<string, string> context = 2;
+  }
+  message A2a {
+  }
+  message InferenceRouting {
+    enum FailureMode {
+      UNKNOWN = 0;
+      FAIL_CLOSED = 1;
+      FAIL_OPEN = 2;
+    }
+    BackendReference endpoint_picker = 1;
+    FailureMode failure_mode = 2;
+  }
+  message BackendTLS {
+    google.protobuf.BytesValue cert = 1;
+    google.protobuf.BytesValue key = 2;
+    // Root to verify. If not set, system certs will be used.
+    // If no verification is desired, use 'insecure'
+    google.protobuf.BytesValue root = 3;
+    // Disable all verification
+    google.protobuf.BoolValue insecure = 4;
+    // If set, override the SNI explicitly. Otherwise, it is auto-derived.
+    google.protobuf.StringValue hostname = 5;
+  }
+  message RBAC {
+    repeated string allow = 1;
+    repeated string deny = 2;
+  }
+  oneof kind {
+    LocalRateLimit local_rate_limit = 1;
+    ExternalAuth ext_authz = 2;
+    A2a a2a = 3;
+    InferenceRouting inference_routing = 4;
+    BackendTLS backend_tls = 5;
+    BackendAuthPolicy auth = 6;
+    RBAC authorization = 7;
+    RBAC mcp_authorization = 8;
+    Ai ai = 9;
+  }
+}
+
+message Policy {
+  // Format is "<ns>/<name>"
+  string name = 1;
+  PolicyTarget target = 2;
+  PolicySpec spec = 3;
+}
+message Backend {
+  // Format is "<ns>/<name>"
+  string name = 1;
+  oneof kind {
+    StaticBackend static = 2;
+    AIBackend ai = 3;
+    MCPBackend mcp = 4;
+  }
+}
+
+message StaticBackend {
+  string host = 1;
+  int32 port = 2;
+}
+
+message AIBackend {
+  message Override {
+    string host = 1;
+    int32 port = 2;
+  }
+  Override override = 1;
+  message OpenAI {
+    google.protobuf.StringValue model = 1;
+  }
+  message Gemini {
+    google.protobuf.StringValue model = 1;
+  }
+  message Vertex {
+    google.protobuf.StringValue model = 1;
+    string region = 2;
+    string project_id = 3;
+  }
+  message Anthropic {
+    google.protobuf.StringValue model = 1;
+  }
+  message Bedrock {
+    google.protobuf.StringValue model = 1;
+    string region = 2;
+    google.protobuf.StringValue guardrail_identifier = 3;
+    google.protobuf.StringValue guardrail_version = 4;
+  }
+  oneof provider {
+    OpenAI openai = 2;
+    Gemini gemini = 3;
+    Vertex vertex = 4;
+    Anthropic anthropic = 5;
+    Bedrock bedrock = 6;
+  }
+}
+
+message MCPBackend {
+  enum StatefulMode {
+    STATEFUL = 0;
+    STATELESS = 1;
+  }
+  repeated MCPTarget targets = 2;
+  // Whether or not this backend should serve stateful MCP connections.
+  // We set this at the backend level because it would be illegal/nonsensical
+  // to mix stateful and stateless targets in the same backend.
+  StatefulMode stateful_mode = 3;
+}
+
+message MCPTarget {
+  enum Protocol {
+    UNDEFINED = 0;
+    SSE = 1;
+    STREAMABLE_HTTP = 2;
+  }
+  string name = 1;
+  BackendReference backend = 2;
+  string path = 3;
+  Protocol protocol = 4;
+}
+
+message BackendReference {
+  oneof kind {
+    // A service (could be Service, ServiceEntry, etc) in "<ns>/<hostname>" format
+    // These are joined with the service discovery.
+    string service = 1;
+    // A Backend object.
+    // Format is "<ns>/<name>". Joined with the Backend object.
+    // Must be of type StaticBackend.
+    string backend = 2;
+  }
+  // Port, used only with 'service' type
+  uint32 port = 3;
+}
